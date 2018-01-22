@@ -7,6 +7,7 @@ from pathlib import Path  # todo check if needed
 GAMMA = 0.999
 
 BATCH_SIZE = 25
+NUM_OF_BATCHES=100
 
 LEARNING_RATE = 0.001
 
@@ -156,10 +157,6 @@ class NeuralNetwork:
 
         # Probably the least readable form to get an arbitrary item from a dict
         n = len(next(iter(batch_dict.values())))
-        print("n : "+str(n))
-        print("batch_size: "+str(batch_size))
-        print("batch dict 10 places: ")
-        print(batch_dict.items()[:10])
         s = []
         for i in range(0, n, batch_size):
             batch_partial_dict = {k: b[i: i + batch_size] for (k, b) in batch_dict.items()}
