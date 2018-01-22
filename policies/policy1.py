@@ -9,7 +9,7 @@ GAMMA = 0.999
 BATCH_SIZE = 100
 NUM_OF_BATCHES=1000
 
-LEARNING_RATE = 0.01
+LEARNING_RATE = 0.001
 
 DB_SIZE = 10000
 
@@ -32,10 +32,15 @@ class Policy1(bp.Policy):  # todo change documentation
 
     def cast_string_args(self, policy_args):  # todo change
         policy_args['save_to'] = str(policy_args['save_to']) if 'save_to' in policy_args else 'policy0.model.pkl'
+        policy_args['gamma'] = str(policy_args['gamma']) if 'gamma' in policy_args else GAMMA
+        policy_args['batch_size'] = str(policy_args['batch_size']) if 'batch_size' in policy_args else BATCH_SIZE
+        policy_args['num_of_batches'] = str(policy_args['num_of_batches']) if 'num_of_batches' in policy_args else NUM_OF_BATCHES
+        policy_args['learning_rate'] = str(policy_args['learning_rate']) if 'learning_rate' in policy_args else LEARNING_RATE
         return policy_args
 
     def init_run(self):  # TODO READ FROM DB
-
+        self.a=policy_args['gamma']
+        self.log("gamma: "+str(self.a))
         # initialize neural network
         self.hidden_layers = [50, 50, 50]
         # self.hidden_layers = [100, 100, 100]
@@ -54,20 +59,16 @@ class Policy1(bp.Policy):  # todo change documentation
         self.optimizer = tf.train.AdamOptimizer(LEARNING_RATE)
         self.train_op = self.optimizer.minimize(self.loss)
         self.session.run(tf.global_variables_initializer())
-        # self.session.run(tf.initialize_all_variables())
 
     def learn(self, round, prev_state, prev_action, reward, new_state, too_slow):
-        #self.log('learn round'+str(round))
-        # r = reward
-        # if not done(new_state,reward):
-        #     print('not done')
-        #     out = self.nn.session.run(self.nn.output, feed_dict={self.nn.input: new_state.reshape(1, ROWS * COLS)})[0]
-        #     v = np.max(out)
-        #     r += GAMMA * v
+        self.log('learn round '+str(round))
+        # update database
         self.db.add_item(prev_state, new_state, prev_action, reward,done(new_state,reward))
-        out=self.nn.session.run(self.nn.output,feed_dict={self.nn,.})
+
         # self.log('database:.......................')
         # self.log(self.db.DB[:10])
+
+        # train in batches
         from_idx=0
         for i in range(NUM_OF_BATCHES):
             batch,real_batch_size = self.db.take_sample(from_idx)
@@ -75,39 +76,38 @@ class Policy1(bp.Policy):  # todo change documentation
             # self.log(batch)
             second_states=batch.s2
             shape = second_states.shape
+            inputs=(batch.s1).reshape(shape[0], shape[1] * shape[2])
             second_states=second_states.reshape(shape[0], shape[1] * shape[2])
+
             v = self.nn.session.run(self.nn.output_max, feed_dict={self.nn.input: second_states})
             q = batch.r + (~batch.done* GAMMA * v)
-            inputs=(batch.s1).reshape(shape[0], shape[1] * shape[2])
+
             feed_dict = {
                 self.nn.input: inputs,
                 self.actions: batch.a,
                 self.q_estimation: q
             }
             self.nn.session.run(self.train_op,feed_dict=feed_dict)
+
             from_idx+=BATCH_SIZE
             if from_idx > self.db.num_of_items:
                 break
 
     def act(self, round, prev_state, prev_action, reward, new_state, too_slow):#TODO add epsilon greedy
-        #self.log('act round'+str(round))
-        out=self.nn.session.run(self.nn.output, feed_dict={self.nn.input: new_state.reshape(1, ROWS * COLS)})[0]
-        # v=np.max(out)
-        # print('out: '+str(out))
-        # print('max: '+str(v))
-        # print('armax: ' + str(act))
-        # print('........................')
-        # r = reward+GAMMA * v
+        self.log('act round '+str(round))
+
+        # update database
         self.db.add_item(prev_state,new_state,prev_action,reward,done(new_state,reward))
-        action=np.argmax(out)
+
         legal_actions = get_legal_moves(new_state)
-        # print('action chosen: '+str(action))
-        # print('................................................')
-        if action in legal_actions:
-            return action
-        else:
-            #self.log('chose random.. help!!!!!!!!!!!!!!!!!!!!!!')
-            return np.random.choice(legal_actions)
+        out=self.nn.session.run(self.nn.output, feed_dict={self.nn.input: new_state.reshape(1, ROWS * COLS)})[0]
+        legal_tup=np.asarray([(i,out[i]) for i in legal_actions])
+        idx=np.argmax(legal_tup[:,1])
+        action = int(legal_tup[idx][0])
+        # self.log('out: '+str(out_probs))
+        # self.log("legal actions"+str(legal_actions))
+        self.log('action chosen: '+str(action))
+        return action
         # legal_actions = get_legal_moves(new_state)
         # return np.random.choice(legal_actions)
 
@@ -136,7 +136,7 @@ class NeuralNetwork:
             a = self.affine("hidden{}".format(i), self.layers[-1], width)
             self.layers.append(a)
         self.output = self.affine("output", self.layers[-1], COLS, relu=False)
-        # self.probabilities = tf.nn.softmax(self.output, name="probabilities")
+        self.probabilities = tf.nn.softmax(self.output, name="probabilities")
 
         self.output_max = tf.reduce_max(self.output, axis=1)
         #self.output_argmax = tf.argmax(self.output, axis=1)
