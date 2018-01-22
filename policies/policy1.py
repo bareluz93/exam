@@ -48,26 +48,25 @@ class Policy1(bp.Policy):  # todo change documentation
         self.db = Database()
 
     def learn(self, round, prev_state, prev_action, reward, new_state, too_slow):
-        # self.db.add_item(prev_state, new_state, prev_action, reward)
-        # self.db.update_rewards(self.nn.output_max, self.nn.session, self.nn.input)
+        self.db.add_item(prev_state, new_state, prev_action, reward)
         # print('database:.......................')
         # print(self.db.DB[:10])
         return
 
     def act(self, round, prev_state, prev_action, reward, new_state, too_slow):
-        # out= self.nn.session.run(self.nn.output, feed_dict={self.nn.input: new_state.reshape(1, ROWS * COLS)})[0]
-        # prob=self.nn.session.run(self.nn.probabilities, feed_dict={self.nn.input: new_state.reshape(1, ROWS * COLS)})[0]
-        # print("output: ")
-        # print(out)
-        # print('probabilites: ')
-        # print(prob)
-        #
-        v = self.nn.session.run(self.nn.output_max, feed_dict={self.nn.input: new_state.reshape(1, ROWS * COLS)})[0]
+        out=self.nn.session.run(self.nn.output, feed_dict={self.nn.input: new_state.reshape(1, ROWS * COLS)})[0]
+        # print('out: '+str(out))
+        v=np.max(out)
+        action=np.argmax(out)
+        # print('max: '+str(v))
+        # print('armax: ' + str(act))
+        # print('........................')
+        # v = self.nn.session.run(self.nn.output_max, feed_dict={self.nn.input: new_state.reshape(1, ROWS * COLS)})[0]
         r = reward+GAMMA * v
         self.db.add_item(prev_state,new_state,prev_action,r)
         legal_actions = get_legal_moves(new_state)
-        action = self.nn.session.run(self.nn.output_argmax,
-                                     feed_dict={self.nn.input: new_state.reshape(1, ROWS * COLS)})[0]
+        # action = self.nn.session.run(self.nn.output_argmax,
+        #                              feed_dict={self.nn.input: new_state.reshape(1, ROWS * COLS)})[0]
         # print('action chosen: '+str(action))
         # print('................................................')
         if action in legal_actions:
@@ -104,8 +103,8 @@ class NeuralNetwork:
         self.output = self.affine("output", self.layers[-1], COLS, relu=False)
         # self.probabilities = tf.nn.softmax(self.output, name="probabilities")
 
-        self.output_max = tf.reduce_max(self.output, axis=1)
-        self.output_argmax = tf.argmax(self.output, axis=1)
+        #self.output_max = tf.reduce_max(self.output, axis=1)
+        #self.output_argmax = tf.argmax(self.output, axis=1)
 
     def load_weights(self, model):
         self.weights = model[:len(self.weights)]
