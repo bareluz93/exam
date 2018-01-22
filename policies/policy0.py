@@ -6,11 +6,11 @@ from pathlib import Path  # todo check if needed
 
 GAMMA = 0.999
 
-BATCH_SIZE = 1000
+BATCH_SIZE = 25
 
 LEARNING_RATE = 0.001
 
-DB_SIZE = 10000000
+DB_SIZE = 1000
 
 EMPTY_VAL = 0
 PLAYER1_ID = 1
@@ -90,6 +90,7 @@ class Policy0(bp.Policy):  # todo change documentation
     def init_run(self):  # TODO READ FROM DB
 
         self.db = History((ROWS, COLS), DB_SIZE)
+        # self.hidden_layers = [50, 50, 50]
         self.hidden_layers = [50, 50, 50]
 
         self.session = tf.Session()
@@ -114,18 +115,19 @@ class Policy0(bp.Policy):  # todo change documentation
         return
 
     def learn(self, round, prev_state, prev_action, reward, new_state, too_slow):
-        self.db.store(prev_state, new_state, prev_action, reward)
-        self.db.update_rewards(self.nn.output_max, self.nn.session, self.nn.input)
-        v = self.nn.predict(self.nn.output_max, self.db.DB.s2, BATCH_SIZE)
-        q = self.db.DB.r + (~self.done(new_state, reward) * GAMMA * v)
-
-        feed_dict = {
-            self.nn.input: self.db.DB.s1,
-            self.actions: self.db.DB.a,
-            self.q_estimation: q
-        }
-
-        self.nn.train_in_batches(self.train_op, feed_dict, self.args.num_batches, BATCH_SIZE)
+        # self.db.store(prev_state, new_state, prev_action, reward)
+        # self.db.update_rewards(self.nn.output_max, self.nn.session, self.nn.input)
+        # v = self.nn.predict(self.nn.output_max, self.db.DB.s2, BATCH_SIZE)
+        # q = self.db.DB.r + (~self.done(new_state, reward) * GAMMA * v)
+        #
+        # feed_dict = {
+        #     self.nn.input: self.db.DB.s1,
+        #     self.actions: self.db.DB.a,
+        #     self.q_estimation: q
+        # }
+        #
+        # self.nn.train_in_batches(self.train_op, feed_dict, self.args.num_batches, BATCH_SIZE)
+        return
 
     def act(self, round, prev_state, prev_action, reward, new_state, too_slow):
         self.db.store(prev_state, new_state, prev_action, reward)
@@ -136,29 +138,32 @@ class Policy0(bp.Policy):  # todo change documentation
             return action
         else:
             return np.random.choice(legal_actions)
-
+        # legal_actions = get_legal_moves(new_state)
+        # return np.random.choice(legal_actions)
     def save_model(self):
         return [self.nn.session.run(var) for var in self.nn.vars()], None
 
 
 class NeuralNetwork:
     @staticmethod
-    def run_op_in_batches(session, op, batch_dict={}, batch_size=None,
-                          extra_dict={}):
+    def run_op_in_batches(session, op, batch_dict={}, batch_size=None):
 
         """Return the result of op by running the network on small batches of
         batch_dict."""
 
         if batch_size is None:
-            return session.run(op, feed_dict={**batch_dict, **extra_dict})
+            return session.run(op, feed_dict={batch_dict})
 
         # Probably the least readable form to get an arbitrary item from a dict
         n = len(next(iter(batch_dict.values())))
-
+        print("n : "+str(n))
+        print("batch_size: "+str(batch_size))
+        print("batch dict 10 places: ")
+        print(batch_dict.items()[:10])
         s = []
         for i in range(0, n, batch_size):
-            bd = {k: b[i: i + batch_size] for (k, b) in batch_dict.items()}
-            s.append(session.run(op, feed_dict={**bd, **extra_dict}))
+            batch_partial_dict = {k: b[i: i + batch_size] for (k, b) in batch_dict.items()}
+            s.append(session.run(op, feed_dict={batch_partial_dict}))
 
         if s[0] is not None:
             if np.ndim(s[0]):
@@ -242,7 +247,8 @@ class NeuralNetwork:
         return tf.boolean_mask(self.output, mask)
 
     def predict(self, op, inputs_feed, batch_size=None):  # TODO flatten input
-        feed_dict = {self.input: inputs_feed}
+        shape=inputs_feed.shape
+        feed_dict = {self.input: inputs_feed.reshape(shape[0],shape[1]*shape[2])}
         return self.run_op_in_batches(self.session, op, feed_dict, batch_size)
 
     def predict_exploration(self, inputs_feed, epsilon=0.1, batch_size=None):
