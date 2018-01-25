@@ -8,14 +8,14 @@ import copy
 
 GAMMA = 0.999
 
-BATCH_SIZE = 100
-NUM_OF_BATCHES = 1000
+BATCH_SIZE = 50
+NUM_OF_BATCHES = 100
 
 LEARNING_RATE = 0.001
 EPSILON = 1
 
 DB_SIZE = 10000
-INPUT = "strategy"
+INPUT = "strategy_depth2_with_feature_1"
 
 EMPTY_VAL = 0
 PLAYER1_ID = 1
@@ -28,15 +28,10 @@ ACTIONS = [0, 1, 2, 3, 4, 5, 6]
 
 
 class Policy1(bp.Policy):  # todo change documentation
-    """
-    An agent performing the Minmax Algorithm for a given depth. The agent will
-    return the right moves if there is a win or a correct defensive move for
-    the given depth, and otherwise act randomly.
-    """
 
     def cast_string_args(self, policy_args):  # todo change
         policy_args['save_to'] = str(policy_args['save_to']) if 'save_to' in policy_args else 'policy1.model.pkl'
-        policy_args['load_from'] = str(policy_args['load_from']) if 'load_from' in policy_args else None
+        policy_args['load_from'] = str(policy_args['load_from']) if 'load_from' in policy_args else policy_args['save_to']
         policy_args['gamma'] = float(policy_args['gamma']) if 'gamma' in policy_args else GAMMA
         policy_args['batch_size'] = int(policy_args['batch_size']) if 'batch_size' in policy_args else BATCH_SIZE
         policy_args['num_of_batches'] = int(
@@ -47,13 +42,15 @@ class Policy1(bp.Policy):  # todo change documentation
             policy_args['epsilon']) if 'epsilon' in policy_args else EPSILON
         return policy_args
 
-    def init_run(self):  # TODO READ FROM DB
+    def init_run(self):
         # load model
-        try:
-            model = pickle.load(open(self.load_from, 'rb'))
+        try:  # TODO: delete before submission
+            load_from = str(Path(os.path.dirname(os.path.abspath(__file__))).parent) + "/models/" + self.load_from
+            with open(load_from, 'rb') as archive:
+                [weights, biases, self.epsilon] = pickle.load(archive)
+
             self.log("Model found", 'STATUS')
-            self.W = [tf.Variable(tf.constant(w)) for w in model[0]]
-            self.b = [tf.Variable(tf.constant(b)) for b in model[1]]
+
 
         except:
             self.log("Model not found, initializing random weights.", 'STATUS')
@@ -61,16 +58,9 @@ class Policy1(bp.Policy):  # todo change documentation
         # initialize neural network
         self.hidden_layers = [50, 50, 50]
         self.session = tf.Session()
-        if INPUT=="strategy":
-            self.input_shape=(2,COLS)
-            self.input_flat_shape=2*COLS
-        elif INPUT =="hot":
-            self.input_shape=(2,ROWS,COLS)
-            self.input_flat_shape=2*ROWS*COLS
-        elif INPUT =="negative_positive" or INPUT =="original":
-            self.input_shape=(ROWS,COLS)
-            self.input_flat_shape=ROWS*COLS
-        self.nn = NeuralNetwork(self.hidden_layers,self.input_flat_shape ,session=self.session, load_from=self.load_from)
+        self.input_shape, self.input_flat_shape = self.get_input_dimensions()
+        self.nn = NeuralNetwork(self.hidden_layers, self.input_flat_shape, session=self.session,
+                                load_from=self.load_from)
 
         # initialize data base
         self.db = Database(state_dim=self.input_shape)
@@ -89,14 +79,12 @@ class Policy1(bp.Policy):  # todo change documentation
         self.log('learn round ' + str(round))
 
         # update database
-        converted_prev_state,converted_new_state=self.convert_boards_srategy(prev_state,new_state)
+        converted_prev_state, converted_new_state = self.convert_boards_representations(prev_state, new_state)
         self.db.add_item(converted_prev_state, converted_new_state, prev_action, reward, done(new_state, reward))
         # self.log("real previous state")
         # self.log("\n" + str(prev_state))
         # self.log("converted_prev:")
         # self.log("\n" + str(converted_prev_state))
-        # self.log("converted_new:")
-        # self.log("\n" + str(converted_new_state))
         # self.log('database:.......................')
         # self.log(self.db.DB[:10])
 
@@ -104,16 +92,21 @@ class Policy1(bp.Policy):  # todo change documentation
         from_idx = 0
         for i in range(self.num_of_batches):
             batch, real_batch_size = self.db.take_sample(from_idx, self.batch_size)
+            if real_batch_size == 0:
+                break
             # self.log('batch:............... ')
             # self.log(batch)
             second_states = batch.s2
             shape = second_states.shape
-            inputs = (batch.s1).reshape(shape[0], shape[1] * shape[2])#todo check dimensions for one hot
-            second_states = second_states.reshape(shape[0], shape[1] * shape[2])#todo check dimensions for one hot
+            if INPUT== "hot":
+                inputs = (batch.s1).reshape(shape[0], shape[1] * shape[2]*shape[3])  # todo check dimensions for one hot
+                second_states = second_states.reshape(shape[0], shape[1] * shape[2]*shape[3])  # todo check dimensions for one hot
+            else:
+                inputs = (batch.s1).reshape(shape[0], shape[1] * shape[2])  # todo check dimensions for one hot
+                second_states = second_states.reshape(shape[0], shape[1] * shape[2])  # todo check dimensions for one hot
 
             v = self.nn.session.run(self.nn.output_max, feed_dict={self.nn.input: second_states})
             q = batch.r + (~batch.done) * self.gamma * v
-
             feed_dict = {
                 self.nn.input: inputs,
                 self.actions: batch.a,
@@ -124,14 +117,43 @@ class Policy1(bp.Policy):  # todo change documentation
             from_idx += real_batch_size
             if from_idx > self.db.num_of_items:
                 break
-        self.log("\nepsilon: "+str(self.epsilon)+"\n")
-        self.epsilon*=1-round/self.game_duration
+        self.log("\nepsilon: " + str(self.epsilon) + "\n")
+        self.epsilon *= 1 - round / self.game_duration
 
-    def act(self, round, prev_state, prev_action, reward, new_state, too_slow):  # TODO add epsilon greedy
-        self.log('act round ' + str(round))
+        # samples = self.db.iter_samples(self.batch_size,
+        #                                self.num_of_batches)
+        #
+        # for sample in samples:
+        #     second_states = sample.s2
+        #     shape = second_states.shape
+        #     if INPUT== "hot":
+        #         inputs = (sample.s1).reshape(shape[0], shape[1] * shape[2]*shape[3])  # todo check dimensions for one hot
+        #         second_states = second_states.reshape(shape[0], shape[1] * shape[2]*shape[3])  # todo check dimensions for one hot
+        #     else:
+        #         inputs = (sample.s1).reshape(shape[0], shape[1] * shape[2])  # todo check dimensions for one hot
+        #         second_states = second_states.reshape(shape[0], shape[1] * shape[2])  # todo check dimensions for one hot
+        #     v = self.nn.session.run(self.nn.output_max, feed_dict={self.nn.input: second_states})
+        #     q = sample.r + (~sample.done * self.gamma * v)
+        #
+        #     feed_dict = {
+        #         self.nn.input: inputs,
+        #         self.actions: sample.a,
+        #         self.q_estimation: q
+        #     }
+        #
+        #     self.nn.session.run(self.train_op, feed_dict=feed_dict)
+        #
+        # self.log("\nepsilon: " + str(self.epsilon) + "\n")
+        # self.epsilon *= 1 - round / self.game_duration
+
+
+
+
+    def act(self, round, prev_state, prev_action, reward, new_state, too_slow):
+        # self.log('act round ' + str(round))
 
         # update database
-        converted_prev_state,converted_new_state=self.convert_boards_srategy(prev_state,new_state)
+        converted_prev_state, converted_new_state = self.convert_boards_representations(prev_state, new_state)
         # self.log("real previous state")
         # self.log("\n" + str(prev_state))
         # self.log("converted_prev:")
@@ -139,11 +161,12 @@ class Policy1(bp.Policy):  # todo change documentation
         self.db.add_item(converted_prev_state, converted_new_state, prev_action, reward, done(new_state, reward))
 
         legal_actions = get_legal_moves(new_state)
-        if np.random.uniform()<self.epsilon:
-            action= np.random.choice(legal_actions)
+        if self.mode=="train" and np.random.uniform() < self.epsilon:
+            action = np.random.choice(legal_actions)
         else:
             # out = self.nn.session.run(self.nn.output, feed_dict={self.nn.input: new_state.reshape(1, ROWS * COLS)})[0]
-            out = self.nn.session.run(self.nn.output, feed_dict={self.nn.input: converted_new_state.reshape(1, self.input_flat_shape)})[0]
+            out = self.nn.session.run(self.nn.output,
+                                      feed_dict={self.nn.input: converted_new_state.reshape(1, self.input_flat_shape)})[0]
             legal_tup = np.asarray([(i, out[i]) for i in legal_actions])
             idx = np.argmax(legal_tup[:, 1])
             action = int(legal_tup[idx][0])
@@ -155,32 +178,271 @@ class Policy1(bp.Policy):  # todo change documentation
 
     def save_model(self):
         return [[self.nn.session.run(w) for w in self.nn.weights_iter()],
-                [self.nn.session.run(b) for b in self.nn.biases_iter()]], self.save_to
+                [self.nn.session.run(b) for b in self.nn.biases_iter()], self.epsilon], self.save_to
 
-    def convert_boards_srategy(self,prev_state,new_state):
+    def convert_boards_representations(self, prev_state, new_state):
 
-        if INPUT=="strategy":
-            converted_prev_state=convert_board_to_strategy_vectors(prev_state,self.id)
-            converted_new_state=convert_board_to_strategy_vectors(new_state,self.id)
-        elif INPUT =="hot":
-            converted_prev_state=convert_board_to_one_hot(prev_state,self.id)
-            converted_new_state=convert_board_to_one_hot(new_state,self.id)
-        elif INPUT =="negative_positive":
-            converted_prev_state=convert_board_representation_negative_positive(prev_state,self.id)
-            converted_new_state=convert_board_representation_negative_positive(new_state,self.id)
+        if INPUT == "strategy":
+            converted_prev_state = self.convert_board_to_strategy_vectors(prev_state)
+            converted_new_state = self.convert_board_to_strategy_vectors(new_state)
+        elif INPUT == "strategy_with_feature_1":
+            converted_prev_state = self.convert_board_to_strategy_vectors_with_feature1(prev_state)
+            converted_new_state = self.convert_board_to_strategy_vectors_with_feature1(new_state)
+        elif INPUT == "strategy_with_feature_2":
+            converted_prev_state = self.convert_board_to_strategy_vectors_with_feature2(prev_state)
+            converted_new_state = self.convert_board_to_strategy_vectors_with_feature2(new_state)
+        elif INPUT == "hot":
+            converted_prev_state = self.convert_board_to_one_hot(prev_state)
+            converted_new_state = self.convert_board_to_one_hot(new_state)
+        elif INPUT == "negative_positive":
+            converted_prev_state = self.convert_board_representation_negative_positive(prev_state)
+            converted_new_state = self.convert_board_representation_negative_positive(new_state)
         elif INPUT == "original":
-            converted_prev_state=prev_state
-            converted_new_state=new_state
-        return converted_prev_state,converted_new_state
+            converted_prev_state = prev_state
+            converted_new_state = new_state
+        elif INPUT == "strategy_depth2_with_feature_1":
+            converted_prev_state = self.convert_board_to_strategy_vectors_depth2_with_feature1(prev_state)
+            converted_new_state = self.convert_board_to_strategy_vectors_depth2_with_feature1(new_state)
+        elif INPUT == "strategy_with_negative_positive":
+            converted_prev_state = self.convert_board_to_strategy_with_negative_positive(prev_state)
+            converted_new_state = self.convert_board_to_strategy_with_negative_positive(new_state)
+        elif INPUT == "strategy_with_feature_3":
+            converted_prev_state = self.convert_board_to_strategy_vectors_with_feature3(prev_state)
+            converted_new_state = self.convert_board_to_strategy_vectors_with_feature3(new_state)
+        return converted_prev_state, converted_new_state
+
+    def get_input_dimensions(self):
+        if INPUT == "strategy":
+            input_shape = (2, COLS)
+            input_flat_shape = 2 * COLS
+        elif INPUT == "strategy_with_feature_1" or INPUT == "strategy_with_feature_2" or INPUT=="strategy_with_feature_3":
+            input_shape = (2, COLS + 1)
+            input_flat_shape = 2 * (COLS + 1)
+        # elif INPUT == "strategy_with_feature_2":
+        #     input_shape = (2, COLS + 2)
+        #     input_flat_shape = 2 * (COLS + 2)
+        elif INPUT == "strategy_depth2_with_feature_1":
+            input_shape = (4, COLS + 1)
+            input_flat_shape = 4 * (COLS + 1)
+        elif INPUT == "hot":
+            input_shape = (2, ROWS, COLS)
+            input_flat_shape = 2 * ROWS * COLS
+        elif INPUT == "negative_positive" or INPUT == "original":
+            input_shape = (ROWS, COLS)
+            input_flat_shape = ROWS * COLS
+        elif INPUT == "strategy_with_negative_positive":
+            input_shape = (ROWS + 2, COLS )
+            input_flat_shape = (ROWS + 2) * (COLS)
+
+        return input_shape, input_flat_shape
+
+    def convert_board_representation_negative_positive(self, board):
+        if board is None:
+            return
+        if self.id == 1:
+            other_player_id = 2
+        else:
+            other_player_id = 1
+        new_board = copy.deepcopy(board)
+        new_board[new_board == other_player_id] = -1
+        new_board[new_board == self.id] = 1
+        return new_board
+
+    def convert_board_to_one_hot(self, board):
+        if board is None:
+            return
+        if self.id == 1:
+            other_player_id = 2
+        else:
+            other_player_id = 1
+        new_board = np.zeros((2, board.shape[0], board.shape[1]))
+        new_board[0][board == self.id] = 1
+        new_board[1][board == other_player_id] = 1
+        return new_board
+
+    def convert_board_to_strategy_vectors(self, board):
+        if board is None:
+            return
+        if self.id == 1:
+            other_player_id = 2
+        else:
+            other_player_id = 1
+        new_board = np.zeros((2, COLS))
+        legal_actions = get_legal_moves(board)
+        for col in legal_actions:
+            if check_for_win(make_move(board, col, self.id), self.id, col):
+                new_board[0][col] = 1
+            if check_for_win(make_move(board, col, other_player_id), other_player_id, col):
+                new_board[1][col] = 1
+        return new_board
+
+    def convert_board_to_strategy_vectors_with_feature1(self, board):
+        if board is None:
+            return
+        if self.id == 1:
+            other_player_id = 2
+        else:
+            other_player_id = 1
+        new_board = np.zeros((2, COLS + 1))
+        legal_actions = get_legal_moves(board)
+        for col in legal_actions:
+            if check_for_win(make_move(board, col, self.id), self.id, col):
+                new_board[0][col] = 1
+                new_board[0][COLS] = 1
+            if check_for_win(make_move(board, col, other_player_id), other_player_id, col):
+                new_board[1][col] = 1
+                new_board[1][COLS] = 1
+        return new_board
+
+    def convert_board_to_strategy_vectors_with_feature2(self, board):
+        if board is None:
+            return
+        if self.id == 1:
+            other_player_id = 2
+        else:
+            other_player_id = 1
+        new_board = np.zeros((2, COLS + 1))
+        legal_actions = get_legal_moves(board)
+        for col in legal_actions:
+            if check_for_win(make_move(board, col, self.id), self.id, col):
+                new_board[0][col] = 1
+                # new_board[0][COLS] = 1
+            if check_for_win(make_move(board, col, other_player_id), other_player_id, col):
+                new_board[1][col] = 1
+                # new_board[1][COLS] = 1
+        if board[ROWS-1,int(COLS/2)]==0:
+            new_board[0][int(COLS/2)]= 1
+            new_board[0][COLS] = 1
+        return new_board
+    def convert_board_to_strategy_vectors_with_feature3(self, board):
+        if board is None:
+            return
+        if self.id == 1:
+            other_player_id = 2
+        else:
+            other_player_id = 1
+        new_board = np.zeros((2, COLS + 1))
+        legal_actions = get_legal_moves(board)
+        for col in legal_actions:
+            if check_for_win(make_move(board, col, self.id), self.id, col):
+                new_board[0][col] = 1
+                # new_board[0][COLS] = 1
+            if check_for_win(make_move(board, col, other_player_id), other_player_id, col):
+                new_board[1][col] = 1
+                # new_board[1][COLS] = 1
+        if board[ROWS-1,int(COLS/2)]==0:
+            new_board[0][int(COLS/2)]= 1
+            new_board[0][COLS] = 1
+        for row in [0,1,5,6]:
+
+            if board[ROWS-1,row]==0:
+                new_board[0][row]= -1
+        return new_board
+
+    def convert_board_to_strategy_with_negative_positive(self, board):
+        if board is None:
+            return
+        new_board1 = self.convert_board_to_strategy_vectors(board)
+        new_board2 = self.convert_board_representation_negative_positive(board)
+        new_board2 = np.append(new_board2, np.zeros((ROWS, 1)), axis=1)
+        return np.append(new_board1, new_board2, axis=0)
+
+    def convert_board_to_strategy_vectors_depth2_with_feature1(self, board):
+        if board is None:
+            return
+        if self.id == 1:
+            other_player_id = 2
+        else:
+            other_player_id = 1
+        new_board = np.zeros((4, COLS + 1))
+        legal_actions_first = get_legal_moves(board)
+        for col in legal_actions_first:
+            check_for_win_mine = check_for_win(make_move(board, col, self.id), self.id, col)
+            if check_for_win_mine:
+                new_board[0][col] = 1
+                new_board[0][COLS] = 1
+            check_for_win_other = check_for_win(make_move(board, col, other_player_id), other_player_id, col)
+            if check_for_win_other:
+                new_board[1][col] = 1
+                new_board[1][COLS] = 1
+
+        if not (1 in new_board[0]) and not (1 in new_board[1]):
+            if not len(legal_actions_first) == 0:
+                random_action_mine = np.random.choice(legal_actions_first)
+                # self.log("my chosen action: " + str(random_action_mine))
+                board_after_my_step = make_move(board, random_action_mine, self.id)
+                legal_actions_second = get_legal_moves(board_after_my_step)
+                if not len(legal_actions_second) == 0:
+                    random_action_other = np.random.choice(legal_actions_second)
+                    # self.log("other chosen action: " + str(random_action_other))
+                    board_after_other_step = make_move(board_after_my_step, random_action_other, other_player_id)
+                    legal_actions_second_other = get_legal_moves(board_after_other_step)
+
+                    for col in legal_actions_second_other:
+                        if check_for_win(make_move(board_after_other_step, col, self.id), self.id, col):
+                            new_board[2][col] = 1
+                            new_board[2][COLS] = 1
+                        if check_for_win(make_move(board_after_other_step, col, other_player_id), other_player_id, col):
+                            new_board[3][col] = 1
+                            new_board[3][COLS] = 1
+
+        return new_board
+
+    def convert_board_to_strategy_vectors_depth2_with_feature2(self, board):
+        if board is None:
+            return
+        if self.id == 1:
+            other_player_id = 2
+        else:
+            other_player_id = 1
+        new_board = np.zeros((4, COLS + 1))
+        legal_actions_first = get_legal_moves(board)
+        for col in legal_actions_first:
+            check_for_win_mine = check_for_win(make_move(board, col, self.id), self.id, col)
+            if check_for_win_mine:
+                new_board[0][col] = 1
+                # new_board[0][COLS] = 1
+            check_for_win_other = check_for_win(make_move(board, col, other_player_id), other_player_id, col)
+            if check_for_win_other:
+                new_board[1][col] = 1
+                # new_board[1][COLS] = 1
+            if board[ROWS-1,int(COLS/2)]==0:
+                new_board[0][int(COLS/2)]= 1
+                new_board[0][COLS] = 1
+
+        if not (1 in new_board[0]) and not (1 in new_board[1]):
+            if not len(legal_actions_first) == 0:
+                random_action_mine = np.random.choice(legal_actions_first)
+                # self.log("my chosen action: " + str(random_action_mine))
+                board_after_my_step = make_move(board, random_action_mine, self.id)
+                legal_actions_second = get_legal_moves(board_after_my_step)
+                if not len(legal_actions_second) == 0:
+                    random_action_other = np.random.choice(legal_actions_second)
+                    # self.log("other chosen action: " + str(random_action_other))
+                    board_after_other_step = make_move(board_after_my_step, random_action_other, other_player_id)
+                    legal_actions_second_other = get_legal_moves(board_after_other_step)
+
+                    for col in legal_actions_second_other:
+                        if check_for_win(make_move(board_after_other_step, col, self.id), self.id, col):
+                            new_board[2][col] = 1
+                            # new_board[2][COLS] = 1
+                        if check_for_win(make_move(board_after_other_step, col, other_player_id), other_player_id, col):
+                            new_board[3][col] = 1
+                            # new_board[3][COLS] = 1
+                        if board_after_other_step[ROWS-1,int(COLS/2)]==0:
+                            new_board[2][int(COLS/2)]= 1
+                            new_board[2][COLS] = 1
+
+        return new_board
 
 
 class NeuralNetwork:
     def __init__(self, hidden_layers, input_shape, load_from=None, session=None, input_=None):
         """Create an ANN with fully connected hidden layers of width
         hidden_layers."""
+        self.initialized = False
         self.load_from = load_from
         self.load_weights()
-
         self.session = tf.Session() if session is None else session
         if input_ is None:
             self.input = tf.placeholder(tf.float32, shape=(None, input_shape), name="input")
@@ -203,16 +465,19 @@ class NeuralNetwork:
     def load_weights(self):
         self.weights = []
         self.biases = []
-        if self.load_from:
+        try:
             # print(self.load_from)
             # print(Path(self.load_from).parent)
             load_from = str(Path(os.path.dirname(os.path.abspath(__file__))).parent) + "/models/" + self.load_from
             print(load_from)
             with open(load_from, 'rb') as archive:
-                [self.weights, self.biases] = pickle.load(archive)
+                [self.weights, self.biases, epsilon] = pickle.load(archive)
                 print(self.weights)
                 print("-------------------------")
                 print(self.biases)
+            self.initialized = True
+        except:
+            return
 
     def weights_iter(self):
         """Iterate over all the weights of the network."""
@@ -229,7 +494,7 @@ class NeuralNetwork:
         input_shape = input_tensor.get_shape().as_list()
         input_channels = input_shape[-1]
         with tf.variable_scope(name_scope):
-            if not self.load_from:
+            if not self.initialized:
                 W = tf.get_variable("weights", initializer=tf.truncated_normal(
                     [input_channels, out_channels], stddev=1.0 / np.sqrt(float(input_channels))))
                 b = tf.get_variable("biases", initializer=tf.zeros([out_channels]))
@@ -261,7 +526,6 @@ class NeuralNetwork:
         return tf.boolean_mask(self.output, mask)
 
 
-
 class Database:
     def __init__(self, state_dim=(ROWS, COLS), db_size=DB_SIZE):
         self.state_dim = state_dim
@@ -284,17 +548,34 @@ class Database:
             self.DB['done'][self.num_of_items] = done
             self.num_of_items += 1
             # if db is full insert next item at the beginning
-            if self.num_of_items+1 > self.db_size:
+            if self.num_of_items + 1 > self.db_size:
                 self.num_of_items = 0
 
     def take_sample(self, from_idx, batch_size=BATCH_SIZE):
         if from_idx + batch_size > self.num_of_items:
-            ret_batch=self.DB[from_idx:]
-            ret_size=self.num_of_items - from_idx
+            ret_batch = self.DB[from_idx:self.num_of_items]
+            ret_size = self.num_of_items - from_idx
             p = np.random.permutation(self.num_of_items)
             self.DB[:self.num_of_items] = np.rec.array(self.DB[:self.num_of_items][p])
-            return ret_batch,ret_size
+            return ret_batch, ret_size
         return self.DB[from_idx:from_idx + batch_size], batch_size
+
+    def iter_samples(self, sample_size, n_samples):
+        """Iterate over random samples from the DB."""
+
+        if sample_size == 0:
+            sample_size = self.num_of_items
+
+        ind = self.num_of_items
+        for i in range(n_samples):
+            end = ind + sample_size
+            if end > self.num_of_items:
+                ind = 0
+                end = sample_size
+                p = np.random.permutation(self.num_of_items)
+                db = np.rec.array(self.DB[p])
+            yield db[ind : end]
+            ind = end
 
 
 def get_legal_moves(board_state):
@@ -346,52 +627,6 @@ def check_for_win(board, player_id, col):
     return False
 
 
-def done(state, reward):
-    return get_legal_moves(state).shape[0] == 0 or reward
-
-
-def convert_board_representation_negative_positive(board, player_id):
-    if board is None:
-        return
-    if player_id == 1:
-        other_player_id = 2
-    else:
-        other_player_id = 1
-    new_board = copy.deepcopy(board)
-    new_board[new_board == player_id] = 1
-    new_board[new_board == other_player_id] = -1
-    return new_board
-
-
-def convert_board_to_one_hot(board, player_id):
-    if board is None:
-        return
-    if player_id == 1:
-        other_player_id = 2
-    else:
-        other_player_id = 1
-    new_board = np.zeros(2, board.shape[0], board.shape[1])
-    new_board[0][board == player_id] = 1
-    new_board[1][board == other_player_id] = 1
-    return new_board
-
-
-def convert_board_to_strategy_vectors(board, player_id):
-    if board is None:
-        return
-    if player_id == 1:
-        other_player_id = 2
-    else:
-        other_player_id = 1
-    new_board = np.zeros((2, COLS))
-    legal_actions=get_legal_moves(board)
-    for col in legal_actions:
-        if check_for_win(make_move(board, col, player_id), player_id, col):
-            new_board[0][col] = 1
-        if check_for_win(make_move(board, col, other_player_id), other_player_id, col):
-            new_board[1][col] = 1
-    return new_board
-
 def make_move(board, action, player_id):
     """
     return a new board with after performing the given move.
@@ -405,3 +640,7 @@ def make_move(board, action, player_id):
     new_board[row, action] = player_id
 
     return new_board
+
+
+def done(state, reward):
+    return get_legal_moves(state).shape[0] == 0 or reward
