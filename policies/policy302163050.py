@@ -12,10 +12,10 @@ BATCH_SIZE = 50
 NUM_OF_BATCHES = 100
 
 LEARNING_RATE = 0.001
-EPSILON = 1
+EPSILON = 0
 
 DB_SIZE = 10000
-INPUT = "strategy_depth2_with_feature_2"
+INPUT = "strategy_with_feature_1"
 
 EMPTY_VAL = 0
 PLAYER1_ID = 1
@@ -27,11 +27,11 @@ WIN_MASK = np.ones(4)
 ACTIONS = [0, 1, 2, 3, 4, 5, 6]
 
 
-class Policy2(bp.Policy):  # todo change documentation
+class Policy302163050(bp.Policy):
 
-    def cast_string_args(self, policy_args):  # todo change
-        policy_args['save_to'] = str(policy_args['save_to']) if 'save_to' in policy_args else 'policy1.model.pkl'
-        policy_args['load_from'] = str(policy_args['load_from']) if 'load_from' in policy_args else policy_args['save_to']
+    def cast_string_args(self, policy_args):
+        policy_args['save_to'] = str(policy_args['save_to']) if 'save_to' in policy_args else 'policy302163050.model.pkl'
+        policy_args['load_from'] = str(policy_args['load_from']) if 'load_from' in policy_args else 'policy302163050.model.pkl'
         policy_args['gamma'] = float(policy_args['gamma']) if 'gamma' in policy_args else GAMMA
         policy_args['batch_size'] = int(policy_args['batch_size']) if 'batch_size' in policy_args else BATCH_SIZE
         policy_args['num_of_batches'] = int(
@@ -44,11 +44,15 @@ class Policy2(bp.Policy):  # todo change documentation
 
     def init_run(self):
         # load model
-        try:  # TODO: delete before submission
-            model = pickle.load(open(self.load_from, 'rb'))
+        try:
+            load_from = str(Path(os.path.dirname(os.path.abspath(__file__))).parent) + "/models/" + self.load_from
+            with open(load_from, 'rb') as archive:
+                [weights, biases, self.epsilon] = pickle.load(archive)
+
+
+
             self.log("Model found", 'STATUS')
-            self.W = [tf.Variable(tf.constant(w)) for w in model[0]]
-            self.b = [tf.Variable(tf.constant(b)) for b in model[1]]
+
 
         except:
             self.log("Model not found, initializing random weights.", 'STATUS')
@@ -68,23 +72,14 @@ class Policy2(bp.Policy):  # todo change documentation
         self.q_values = self.nn.take(self.actions)
         self.q_estimation = tf.placeholder(tf.float32, (None,), name="q_estimation")
         self.loss = tf.reduce_mean((self.q_estimation - self.q_values) ** 2)
-        # self.optimizer = tf.train.AdamOptimizer(self.learning_rate)
         self.optimizer = tf.train.AdamOptimizer()
         self.train_op = self.optimizer.minimize(self.loss)
         self.session.run(tf.global_variables_initializer())
 
     def learn(self, round, prev_state, prev_action, reward, new_state, too_slow):
-        self.log('learn round ' + str(round))
-
         # update database
         converted_prev_state, converted_new_state = self.convert_boards_representations(prev_state, new_state)
         self.db.add_item(converted_prev_state, converted_new_state, prev_action, reward, done(new_state, reward))
-        # self.log("real previous state")
-        # self.log("\n" + str(prev_state))
-        # self.log("converted_prev:")
-        # self.log("\n" + str(converted_prev_state))
-        # self.log('database:.......................')
-        # self.log(self.db.DB[:10])
 
         # train in batches
         from_idx = 0
@@ -92,16 +87,14 @@ class Policy2(bp.Policy):  # todo change documentation
             batch, real_batch_size = self.db.take_sample(from_idx, self.batch_size)
             if real_batch_size == 0:
                 break
-            # self.log('batch:............... ')
-            # self.log(batch)
             second_states = batch.s2
             shape = second_states.shape
             if INPUT== "hot":
-                inputs = (batch.s1).reshape(shape[0], shape[1] * shape[2]*shape[3])  # todo check dimensions for one hot
-                second_states = second_states.reshape(shape[0], shape[1] * shape[2]*shape[3])  # todo check dimensions for one hot
+                inputs = (batch.s1).reshape(shape[0], shape[1] * shape[2]*shape[3])
+                second_states = second_states.reshape(shape[0], shape[1] * shape[2]*shape[3])
             else:
-                inputs = (batch.s1).reshape(shape[0], shape[1] * shape[2])  # todo check dimensions for one hot
-                second_states = second_states.reshape(shape[0], shape[1] * shape[2])  # todo check dimensions for one hot
+                inputs = (batch.s1).reshape(shape[0], shape[1] * shape[2])
+                second_states = second_states.reshape(shape[0], shape[1] * shape[2])
 
             v = self.nn.session.run(self.nn.output_max, feed_dict={self.nn.input: second_states})
             q = batch.r + (~batch.done) * self.gamma * v
@@ -115,68 +108,29 @@ class Policy2(bp.Policy):  # todo change documentation
             from_idx += real_batch_size
             if from_idx > self.db.num_of_items:
                 break
-        self.log("\nepsilon: " + str(self.epsilon) + "\n")
-        self.epsilon *= 1 - round / self.game_duration
-
-        # samples = self.db.iter_samples(self.batch_size,
-        #                                self.num_of_batches)
-        #
-        # for sample in samples:
-        #     second_states = sample.s2
-        #     shape = second_states.shape
-        #     if INPUT== "hot":
-        #         inputs = (sample.s1).reshape(shape[0], shape[1] * shape[2]*shape[3])  # todo check dimensions for one hot
-        #         second_states = second_states.reshape(shape[0], shape[1] * shape[2]*shape[3])  # todo check dimensions for one hot
-        #     else:
-        #         inputs = (sample.s1).reshape(shape[0], shape[1] * shape[2])  # todo check dimensions for one hot
-        #         second_states = second_states.reshape(shape[0], shape[1] * shape[2])  # todo check dimensions for one hot
-        #     v = self.nn.session.run(self.nn.output_max, feed_dict={self.nn.input: second_states})
-        #     q = sample.r + (~sample.done * self.gamma * v)
-        #
-        #     feed_dict = {
-        #         self.nn.input: inputs,
-        #         self.actions: sample.a,
-        #         self.q_estimation: q
-        #     }
-        #
-        #     self.nn.session.run(self.train_op, feed_dict=feed_dict)
-        #
-        # self.log("\nepsilon: " + str(self.epsilon) + "\n")
-        # self.epsilon *= 1 - round / self.game_duration
-
-
-
 
     def act(self, round, prev_state, prev_action, reward, new_state, too_slow):
-        # self.log('act round ' + str(round))
 
         # update database
         converted_prev_state, converted_new_state = self.convert_boards_representations(prev_state, new_state)
-        # self.log("real previous state")
-        # self.log("\n" + str(prev_state))
-        # self.log("converted_prev:")
-        # self.log("\n" + str(converted_prev_state))
         self.db.add_item(converted_prev_state, converted_new_state, prev_action, reward, done(new_state, reward))
 
         legal_actions = get_legal_moves(new_state)
         if self.mode=="train" and np.random.uniform() < self.epsilon:
             action = np.random.choice(legal_actions)
         else:
-            # out = self.nn.session.run(self.nn.output, feed_dict={self.nn.input: new_state.reshape(1, ROWS * COLS)})[0]
             out = self.nn.session.run(self.nn.output,
                                       feed_dict={self.nn.input: converted_new_state.reshape(1, self.input_flat_shape)})[0]
             legal_tup = np.asarray([(i, out[i]) for i in legal_actions])
             idx = np.argmax(legal_tup[:, 1])
             action = int(legal_tup[idx][0])
-        # self.log('out: '+str(out_probs))
-        # self.log("legal actions"+str(legal_actions))
-        # self.log('action chosen: ' + str(action))
 
         return action
 
     def save_model(self):
-        return [[self.nn.session.run(w) for w in self.nn.weights_iter()],
-                [self.nn.session.run(b) for b in self.nn.biases_iter()]], self.save_to
+        ret= [[self.nn.session.run(w) for w in self.nn.weights_iter()],
+                [self.nn.session.run(b) for b in self.nn.biases_iter()], self.epsilon], self.save_to
+        return ret
 
     def convert_boards_representations(self, prev_state, new_state):
 
@@ -219,9 +173,6 @@ class Policy2(bp.Policy):  # todo change documentation
         elif INPUT == "strategy_with_feature_1" or INPUT == "strategy_with_feature_2" or INPUT=="strategy_with_feature_3":
             input_shape = (2, COLS + 1)
             input_flat_shape = 2 * (COLS + 1)
-        # elif INPUT == "strategy_with_feature_2":
-        #     input_shape = (2, COLS + 2)
-        #     input_flat_shape = 2 * (COLS + 2)
         elif INPUT == "strategy_depth2_with_feature_1" or INPUT == "strategy_depth2_with_feature_2":
             input_shape = (4, COLS + 1)
             input_flat_shape = 4 * (COLS + 1)
@@ -307,10 +258,8 @@ class Policy2(bp.Policy):  # todo change documentation
         for col in legal_actions:
             if check_for_win(make_move(board, col, self.id), self.id, col):
                 new_board[0][col] = 1
-                # new_board[0][COLS] = 1
             if check_for_win(make_move(board, col, other_player_id), other_player_id, col):
                 new_board[1][col] = 1
-                # new_board[1][COLS] = 1
         if board[ROWS-1,int(COLS/2)]==0:
             new_board[0][int(COLS/2)]= 1
             new_board[0][COLS] = 1
@@ -370,12 +319,10 @@ class Policy2(bp.Policy):  # todo change documentation
         if not (1 in new_board[0]) and not (1 in new_board[1]):
             if not len(legal_actions_first) == 0:
                 random_action_mine = np.random.choice(legal_actions_first)
-                # self.log("my chosen action: " + str(random_action_mine))
                 board_after_my_step = make_move(board, random_action_mine, self.id)
                 legal_actions_second = get_legal_moves(board_after_my_step)
                 if not len(legal_actions_second) == 0:
                     random_action_other = np.random.choice(legal_actions_second)
-                    # self.log("other chosen action: " + str(random_action_other))
                     board_after_other_step = make_move(board_after_my_step, random_action_other, other_player_id)
                     legal_actions_second_other = get_legal_moves(board_after_other_step)
 
@@ -388,6 +335,7 @@ class Policy2(bp.Policy):  # todo change documentation
                             new_board[3][COLS] = 1
 
         return new_board
+
     def convert_board_to_strategy_vectors_depth2_with_feature2(self, board):
         if board is None:
             return
@@ -401,11 +349,9 @@ class Policy2(bp.Policy):  # todo change documentation
             check_for_win_mine = check_for_win(make_move(board, col, self.id), self.id, col)
             if check_for_win_mine:
                 new_board[0][col] = 1
-                # new_board[0][COLS] = 1
             check_for_win_other = check_for_win(make_move(board, col, other_player_id), other_player_id, col)
             if check_for_win_other:
                 new_board[1][col] = 1
-                # new_board[1][COLS] = 1
             if board[ROWS-1,int(COLS/2)]==0:
                 new_board[0][int(COLS/2)]= 1
                 new_board[0][COLS] = 1
@@ -413,22 +359,18 @@ class Policy2(bp.Policy):  # todo change documentation
         if not (1 in new_board[0]) and not (1 in new_board[1]):
             if not len(legal_actions_first) == 0:
                 random_action_mine = np.random.choice(legal_actions_first)
-                # self.log("my chosen action: " + str(random_action_mine))
                 board_after_my_step = make_move(board, random_action_mine, self.id)
                 legal_actions_second = get_legal_moves(board_after_my_step)
                 if not len(legal_actions_second) == 0:
                     random_action_other = np.random.choice(legal_actions_second)
-                    # self.log("other chosen action: " + str(random_action_other))
                     board_after_other_step = make_move(board_after_my_step, random_action_other, other_player_id)
                     legal_actions_second_other = get_legal_moves(board_after_other_step)
 
                     for col in legal_actions_second_other:
                         if check_for_win(make_move(board_after_other_step, col, self.id), self.id, col):
                             new_board[2][col] = 1
-                            # new_board[2][COLS] = 1
                         if check_for_win(make_move(board_after_other_step, col, other_player_id), other_player_id, col):
                             new_board[3][col] = 1
-                            # new_board[3][COLS] = 1
                         if board_after_other_step[ROWS-1,int(COLS/2)]==0:
                             new_board[2][int(COLS/2)]= 1
                             new_board[2][COLS] = 1
@@ -436,18 +378,11 @@ class Policy2(bp.Policy):  # todo change documentation
         return new_board
 
 
-    def choose_action_from_nn(self, board, legal_actions):
-        out = self.nn.session.run(self.nn.output,
-                                  feed_dict={self.nn.input: board.reshape(1, self.input_flat_shape)})[0]
-        legal_tup = np.asarray([(i, out[i]) for i in legal_actions])
-        idx = np.argmax(legal_tup[:, 1])
-        return int(legal_tup[idx][0])
-
-
 class NeuralNetwork:
     def __init__(self, hidden_layers, input_shape, load_from=None, session=None, input_=None):
         """Create an ANN with fully connected hidden layers of width
         hidden_layers."""
+        self.initialized = False
         self.load_from = load_from
         self.load_weights()
         self.session = tf.Session() if session is None else session
@@ -457,7 +392,6 @@ class NeuralNetwork:
             self.input = input_
 
         # create layers
-
         self.layers = [self.input]
 
         for i, width in enumerate(hidden_layers):
@@ -467,21 +401,16 @@ class NeuralNetwork:
         self.probabilities = tf.nn.softmax(self.output, name="probabilities")
 
         self.output_max = tf.reduce_max(self.output, axis=1)
-        # self.output_argmax = tf.argmax(self.output, axis=1)
 
     def load_weights(self):
         self.weights = []
         self.biases = []
         try:
-            # print(self.load_from)
-            # print(Path(self.load_from).parent)
             load_from = str(Path(os.path.dirname(os.path.abspath(__file__))).parent) + "/models/" + self.load_from
             print(load_from)
             with open(load_from, 'rb') as archive:
-                [self.weights, self.biases] = pickle.load(archive)
-                print(self.weights)
-                print("-------------------------")
-                print(self.biases)
+                [self.weights, self.biases, epsilon] = pickle.load(archive)
+            self.initialized = True
         except:
             return
 
@@ -500,7 +429,7 @@ class NeuralNetwork:
         input_shape = input_tensor.get_shape().as_list()
         input_channels = input_shape[-1]
         with tf.variable_scope(name_scope):
-            if not self.load_from:
+            if not self.initialized:
                 W = tf.get_variable("weights", initializer=tf.truncated_normal(
                     [input_channels, out_channels], stddev=1.0 / np.sqrt(float(input_channels))))
                 b = tf.get_variable("biases", initializer=tf.zeros([out_channels]))
@@ -565,23 +494,6 @@ class Database:
             self.DB[:self.num_of_items] = np.rec.array(self.DB[:self.num_of_items][p])
             return ret_batch, ret_size
         return self.DB[from_idx:from_idx + batch_size], batch_size
-
-    def iter_samples(self, sample_size, n_samples):
-        """Iterate over random samples from the DB."""
-
-        if sample_size == 0:
-            sample_size = self.num_of_items
-
-        ind = self.num_of_items
-        for i in range(n_samples):
-            end = ind + sample_size
-            if end > self.num_of_items:
-                ind = 0
-                end = sample_size
-                p = np.random.permutation(self.num_of_items)
-                db = np.rec.array(self.DB[p])
-            yield db[ind : end]
-            ind = end
 
 
 def get_legal_moves(board_state):
@@ -649,4 +561,4 @@ def make_move(board, action, player_id):
 
 
 def done(state, reward):
-    return get_legal_moves(state).shape[0] == 0 or reward
+    return get_legal_moves(state).shape[0] == 0 or reward!=0
